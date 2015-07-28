@@ -13,6 +13,8 @@
 #include <math.h>
 
 
+#define kSampleNum (1000)	//サンプル点数
+
 #define kPWMMAX (1000)	//PWMのフルスケール値
 #define _PC10 ((uint16_t)(1<<10)) // LED1
 #define _PC11 ((uint16_t)(1<<11)) // LED2
@@ -47,13 +49,14 @@ void xTim3Init(void);
 #define SPI3_CS_LOW()	GPIO_ResetBits(GPIOD, GPIO_Pin_2)
 
 TControlTable gT;
-uint16_t g_ad_value[8];
+uint8_t g_ad_value[kSampleNum];
 int32_t gTimCount;
 uint16_t g_motor_pos_pre=0;
 uint16_t g_motor_pos_pre2=0;
 float gPulse2Rad;
 float gVolt2Duty;
 long gLineInt;
+int gAdFlag=0;
 
 #define kSpiReadMax 100
 
@@ -89,12 +92,42 @@ int main(void)
 		if(rxnum>0){
 			char c=xUSART2_getc();
 			if(c=='d')xUSART2_puts(buf);
+			if(c=='s'){
+				xLed(1);
+
+				gAdFlag=0;
+				ADC_DeInit();
+				xADCInit();
+				xLed(0);
+
+//				DMA_Cmd (DMA2_Stream0, ENABLE);
+//				ADC_Cmd(ADC1, ENABLE);
+//				ADC_SoftwareStartConv(ADC1);
+			}
+		}
+		if(gAdFlag==1){
+
+			int i;
+			xUSART2_puts("start\r\n");
+			xLed(0);
+			for(i=0;i<kSampleNum;i++){
+				sprintf(buf,"%03d\r\n",g_ad_value[i]);
+				xUSART2_puts(buf);
+			}
+			xLed(1);
+			xUSART2_puts("end\r\n");
+			//再開
+			gAdFlag=0;
+			ADC_DeInit();
+			xADCInit();
+
+
 		}
 		//if(c=='p')xTdkWrite16bit(0x41,1);
 
 		Delay(0xFFF);
-		sprintf(buf,"0,%d,1,%d\r\n",g_ad_value[0],g_ad_value[1]);
-		xUSART2_puts(buf);
+//		sprintf(buf,"0,%d,1,%d\r\n",g_ad_value[0],g_ad_value[1]);
+//		xUSART2_puts(buf);
 
 	}
 
@@ -204,12 +237,15 @@ void xADCInit()
 	DMA_InitStructure.DMA_PeripheralBaseAddr = (uint32_t)&(ADC1->DR);
 	DMA_InitStructure.DMA_Memory0BaseAddr = (uint32_t)&g_ad_value;
 	DMA_InitStructure.DMA_DIR = DMA_DIR_PeripheralToMemory;
-	DMA_InitStructure.DMA_BufferSize = 2;	//ADCチャンネル数
+	DMA_InitStructure.DMA_BufferSize = kSampleNum;	//転送回数
 	DMA_InitStructure.DMA_PeripheralInc = DMA_PeripheralInc_Disable;
 	DMA_InitStructure.DMA_MemoryInc = DMA_MemoryInc_Enable;
-	DMA_InitStructure.DMA_PeripheralDataSize = DMA_PeripheralDataSize_HalfWord;
-	DMA_InitStructure.DMA_MemoryDataSize = DMA_MemoryDataSize_HalfWord;
-	DMA_InitStructure.DMA_Mode = DMA_Mode_Circular;
+//	DMA_InitStructure.DMA_PeripheralDataSize = DMA_PeripheralDataSize_HalfWord;	//ペリフェラルのデータサイズ
+//	DMA_InitStructure.DMA_MemoryDataSize = DMA_MemoryDataSize_HalfWord;	//メモリのデータサイズ
+	DMA_InitStructure.DMA_PeripheralDataSize = DMA_PeripheralDataSize_Byte;	//ペリフェラルのデータサイズ
+	DMA_InitStructure.DMA_MemoryDataSize = DMA_MemoryDataSize_Byte;	//メモリのデータサイズ
+//	DMA_InitStructure.DMA_Mode = DMA_Mode_Circular;		//繰り返し実行
+	DMA_InitStructure.DMA_Mode = DMA_Mode_Normal;		//1回の転送で終わり
 	DMA_InitStructure.DMA_Priority = DMA_Priority_High;
 	DMA_InitStructure.DMA_FIFOMode = DMA_FIFOMode_Disable;
 	DMA_InitStructure.DMA_FIFOThreshold = DMA_FIFOThreshold_HalfFull;
@@ -239,15 +275,12 @@ void xADCInit()
 	ADC_InitStructure.ADC_ContinuousConvMode = ENABLE;
 	ADC_InitStructure.ADC_ExternalTrigConvEdge = ADC_ExternalTrigConvEdge_None;
 	ADC_InitStructure.ADC_DataAlign = ADC_DataAlign_Right;
-	ADC_InitStructure.ADC_NbrOfConversion = 2;	//ADCの本数
+	ADC_InitStructure.ADC_NbrOfConversion = 1;	//ADCの本数
 	ADC_Init (ADC1, &ADC_InitStructure);
 
-	//480cyclesだと43KHzぐらい
-//	ADC_RegularChannelConfig(ADC1, ADC_Channel_12, 1, ADC_SampleTime_480Cycles);
-//	ADC_RegularChannelConfig(ADC1, ADC_Channel_13, 2, ADC_SampleTime_480Cycles);
-	//56cyclesで333KHz.これ以上早くするとUSART2からTXできない。
-	ADC_RegularChannelConfig(ADC1, ADC_Channel_12, 1, ADC_SampleTime_56Cycles);
-	ADC_RegularChannelConfig(ADC1, ADC_Channel_13, 2, ADC_SampleTime_56Cycles);
+
+	ADC_RegularChannelConfig(ADC1, ADC_Channel_12, 1, ADC_SampleTime_3Cycles);
+//	ADC_RegularChannelConfig(ADC1, ADC_Channel_13, 2, ADC_SampleTime_3Cycles);
 
 
 	// Enable ADC1 DMA
@@ -285,6 +318,7 @@ void DMA2_Stream0_IRQHandler(void)
 		/* Turn LED3 on: End of Transfer */
 		xLed(1);
 		xLed(0);
+		gAdFlag=1;	//変換終了フラグ
 
 		// Add code here to process second half of buffer (pong)
 	}
